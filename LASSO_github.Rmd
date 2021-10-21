@@ -1,0 +1,332 @@
+---
+title: 'The Effect of CAPM $\beta$ on Excess Return of Stocks'
+output:
+  html_document: default
+  word_document: default
+---
+
+# Machine Learning Final Project
+
+
+
+## 1. Motivation and Research Question
+
+Gu, Kelly and Xiu (2018, NBER working paper) "Empirical Asset Pricing via Machine Learning" compares several major machine learning techniques on the excess return prediction by firm characteristics information. The paper is accessible from https://www.nber.org/papers/w25398. 
+
+The motivation of the paper and this project is straightforward. Machine learning method is efficient when dealing with large number of regressors as we can impose regularization term to penalize the model complexity. The prediction model in the paper does not concern with the effect of a particular regressor. Instead, it aims to search for variables with strong prediction power. The over-arching model in the paper is:
+
+$$\begin{equation}
+r_{i,t+1}=E_{t}\left(r_{i,t+1}\right)+\epsilon_{i,t+1}
+\end{equation}$$
+
+where, 
+$$\begin{equation}
+E_{t}\left(r_{i,t+1}\right)=g^{*}\left(z_{i,t}\right)
+\end{equation}$$
+
+
+Stocks are indexed by $i$ and months by $t$. $r_{i,t+1}$ represents an asset’s excess return and $z_{i,t}$ denotes the $k$ dimensional matrix of regressors that might have explanatory/prediction power on the expected excess return. $g^{*}\left(z_{i,t}\right)$ is a flexible function representing various machine learning models in the paper.  
+
+Among 94 firm characteristics and 74 industry dummies included in the model, $\beta$ is one of them and chosen as the variable of interest for the estimation of this project. $\beta$ was introduced in the CAPM model by Sharpe (1964) and represents the covariance of a single stock's returns with those of the whole market. The representation of the CAPM equation is: 
+
+$$\begin{equation}
+E\left(R_{i}\right)-R_{f}=\beta\left(E\left(R_{m}\right)-R_{f}\right)
+\end{equation}$$
+
+where $R_i$, $R_f$ and $R_m$ represent return of an individual stock, risk free asset, and market portfolio respectively. Note $R_i-R_f$ gives back $r_i$ in the over-arching model. The model describes that the excess return on a security is equal to the market risk premium times the covariance of the stock and the market, which is based on $\beta$. It has been popular for over 40 years since its birth and broadly used as a pricing method for risky assets. Despite the fact that Sharpe's CAPM model has won him a Nobel prize and widespread recognition in the financial industry, it has always been subject to empirical scrutiny and critiques (Jensenb,Black, Scholes(1972), Fama French(2004,2014),etc). In this project, I will add to the literature by using machine learning method to estimate the effect of $\beta$ related to the excess return of stocks.  
+
+
+Gu’s paper uses, among other models, a generalized linear model with elastic net as one of the machine learning prediction approaches. They adaptively optimize the tuning parameter $\alpha$ to achieve better out-of-sample $R^2$. Although I view this as a proper application for the current unstable context, where regressors are well known to be highly correlated with each other and a small change of data could lead to completely different predictions, in order to apply the learning materials in the course, I will employ the two extreme cases of the elastic net, ie. LASSO and Ridge, to illustrate prediction techniques of machine learning. Then I will proceed to focus on the estimation of $\beta$ with Post LASSO based Double LASSO. The equation for estimation is: 
+
+$$\begin{equation}
+E_{t}\left(r_{i,t+1}\right)=\alpha+\varphi D_{i,t}+\gamma X_{i,t}+d_{t}+u_{i,t}
+\end{equation}$$
+
+
+Where $g^{*}\left(z_{i,t}\right)=\varphi D_{i,t}+\gamma X_{i,t}$,  $D_{i,t}$ is the variable of interest, i.e. $\beta$, and $X_{i,t}$ is a matrix of all other firms characteristic control, $d_t$ controls fixed effect of time, and $u_{i,t}$ is the residual term.   
+
+Referring to Model Portfolio Theory by Francis and Kim (2013), if CAPM is valid, the test of CAPM should indicate: 
+
+* The intercept term $\alpha$ should not be significantly different from zero. 
+* The slope coefficient on the $\beta$ ($\varphi$) should be positive.
+* $\beta$ should be the only variable that explains returns of risky assets. When other variables such as idiosyncratic risk or firm characteristics ($X_{i,t}$) are added into the cross-sectional regression equation, these variables should have no explanatory power. That is, the coefficient on these variables should not be significantly different from zero.
+
+I will verify these three points in the estimation part of the project. 
+
+## 2. Data
+
+### 2.1 Data Source
+The firm characteristic data from Gu, Kelly and Xiu (2018) is available from http://shihaogu.com/#research
+
+The return of each stock is from CRSP and accessible from WRDS. 
+
+Data cleansing of the full 30k stocks dataset (3Gb and 3.7M rows) has been done by leveraging the dplyr library. Computing the excess returns, replacing missing data by the median for each date, and filtering by year can be done within minutes on a relatively low spec laptop.
+
+(Data cleansing procedure is not included in the script.)
+
+The complete dataset includes figures of almost 30,000 stocks listed in the NYSE, AMEX, and NASDAQ across 60 years from 1957 to 2016. Treasury-bill rate is used to proxy fro the risk-free rate. The collection of stock-level predictive characteristics includes 94 characteristics and 74 industry dummies. The details of the variables are listed on Table A5 of Gu(2018). 
+
+
+```{r}
+gc()
+memory.limit()
+memory.limit(999999)
+
+library(data.table)
+input=("cleaned_data_16.csv")
+project=fread(input)
+
+project=na.omit(project)
+```
+
+```{r}
+length(unique(project$permno))
+```
+
+### 2.2 Data Structure
+
+Because of computational limitation, this project will be based on the latest 5-year subset of the data, namely all the listed stocks from 2012 to 2016. The total stock number is 7,464 and the total number of observations is 331,912.
+
+Following the paper, I focus on the explanatory/predictive power of the 94 firm characteristic and idiosyncratic risk variables. The industry and time dummies are factors represented by sic2.f and DATE.f. Other factor variables include ps.f (financial statement scores), rd.f(R&D increase dummy), divi.f(dividend initiation),divo.f(dividend omission), ms.f(financial statement score). 
+
+From the descriptive summary of $\beta$, we can see that, though the negative regime exists, 75% of the $\beta$ is at least 0.69. Regarding the descriptive summary of excess return, we can see at least 50% of stocks would have less than 0.6% excess return compared to risk free asset.   
+
+
+```{r, results='asis'}
+suppressMessages(library(stargazer))
+
+project = subset(project, select = -c(V1,divi,divo,ps,rd,ms,sic2,permno,DATE,permno.f))
+
+suppressWarnings(stargazer(as.matrix(summary(project$beta,digit=6)),type="html",title="Beta summary",digits=6))
+
+suppressWarnings(stargazer(as.matrix(summary(project$return,digit=6)),type="html",title="Returns summary",digits=6))
+names(project)
+dim(project)
+
+```
+
+## 3. Prediction with Machine Learning: Ridge and Lasso
+
+```{r}
+suppressMessages(library(AER))
+library(hdm)
+library(knitr)
+library(glmnet)
+```
+
+### 3.1 Ridge
+I first perform prediction with the tuning parameter $\alpha=0$, which is a Ridge model. The sample is split to training and testing subset randomly. Different from estimation, forecasting seeks to keep as much information as possible. Cross validation is used to search for the best lambda to minimize the MSE. 
+```{r}
+
+x=model.matrix(return~ mvel1+beta+betasq+chmom+dolvol+idiovol+indmom+mom1m+mom6m+mom12m+mom36m+pricedelay+turn+absacc+acc+age+agr+bm+bm_ia+cashdebt+cashpr+cfp+cfp_ia+chatoia+chcsho+chempia+chinv+chpmia+convind+currat+depr+dy+egr+ep+gma+grcapx+grltnoa+herf+hire+invest+lev+lgr+mve_ia+operprof+orgcap+pchcapx_ia+pchcurrat+pchdepr+pchgm_pchsale+pchquick+pchsale_pchinvt+pchsale_pchrect+pchsale_pchxsga+pchsaleinv+pctacc+quick+rd_mve+rd_sale+realestate+roic+salecash+saleinv+salerec+secured+securedind+sgr+sin+sp+tang+tb+aeavol+cash+chtx+cinvest+ear+nincr+roaq+roavol+roeq+rsup+stdacc+stdcf+baspread+ill+maxret+retvol+std_dolvol+std_turn+zerotrade+as.factor(divi.f)+as.factor(divo.f)+as.factor(ps.f)+as.factor(rd.f)+as.factor(ms.f)+as.factor(sic2.f)+as.factor(DATE.f),data=project)[,-1]
+y=project$return
+
+set.seed(1,sample.kind="Rejection")
+train=sample(1:nrow(x),nrow(x)/2)
+test=(-train)
+y.test=y[test]
+
+cv.ridge=cv.glmnet(x[train,],y[train],alpha=0,nfolds=10)
+
+plot(cv.ridge)
+```
+
+With L2 norm penalty term, Ridge is with shrinkage property but not selection. All regressors are kept to maximize the predictive power. 
+
+```{r, results='asis'}
+ridge.mod=glmnet(x[train,],y[train],alpha=0)
+ridge.pred=predict(ridge.mod,s=cv.ridge$lambda.min,newx=x[test,],exact=T,x=x[train,],y=y[train])
+
+ridgecoef = as.matrix(coef(ridge.mod,cv.ridge$lambda.min,digits=6))
+
+suppressWarnings(stargazer(ridgecoef,type="html",title="Ridge Coefficients",digits=6))
+```
+```{r}
+mean((ridge.pred-y.test)^2)
+```
+### 3.2 Adaptive LASSO
+I then perform prediction with the tuning parameter $\alpha=1$, which is a LASSO model. With the L1 norm setting, Lasso can exactly push the coeffecients of some weak explanatory variables to zero. Adaptive LASSO is used to apply penalty term in a data driven way. Lambda is larger compared to the the Ridge model to be selective.   
+
+```{r}
+
+w=coef(ridge.mod)[-1]
+w=1/abs(w)
+
+cv.lasso=cv.glmnet(x[train,],y[train],data=project,alpha=1,family="gaussian",nfolds=10,penalty.factor=w,standardize=FALSE)
+
+plot(cv.lasso)
+```
+
+The coefficients of some regressors are reduced to zero. But given the prediction purpose, I use the best lambda instead of the 1se one, to limit the selection power of LASSO.  
+```{r, results='asis'}
+
+lasso.mod=glmnet(x[train,],y[train],alpha=1)
+lasso.pred=predict(lasso.mod,s=cv.lasso$lambda.min,newx=x[test,],exact=T,x=x[train,],y=y[train])
+
+lassocoef = as.matrix(coef(cv.lasso,cv.lasso$lambda.min, digits=6))
+
+suppressWarnings(stargazer(lassocoef,type="html",title="LASSO Coefficients",digits=6))
+
+```
+
+The prediction of both approaches produce reasonable performance as indicated by the balanced in-sample and out-of-sample MSE. On the other hand, Ridge has a better predictive power than LASSO because of its smaller penalty term and less biased estimates. 
+```{r}
+
+mean((lasso.pred-y.test)^2)
+
+```
+
+## 4. Estimation of $\beta$ with Machine Learning: Post-LASSO with Double LASSO
+In this section, I will estimate the effect of CAPM $\beta$ on the excess return on stock level. The simple OLS regressed only on $\beta$ corresponds to the original CAPM model. Then I proceed to include all controls in the simple OLS model to compare with the naive adaptive LASSO and post LASSO based double LASSO.  
+
+### 4.1 Simple OLS on $\beta$
+The estimation of $\beta$ is -0.0021 and it is significant with 95% confidence interval [-0.00297,-0.00134]. It shows that excess return of a stock is negatively correlated with $\beta$, which contradicts with the original CAPM model. In addition, the intercept term is significantly different from zero. Without any control, the model likely suffers from omitted variable bias.
+
+```{r, results='asis'}
+OLS=lm(return ~ beta, data=project)
+OLScoef=coeftest(OLS,vcov=vcovHC(OLS, type = "HC0"), digits=6)
+
+suppressWarnings(stargazer(OLScoef,type="html",title="Beta OLS Coefficients", digits=6))
+
+```
+
+```{r, results='asis'}
+OLSCI=round(confint(OLS)[2,],digits=6)
+
+suppressWarnings(stargazer(OLSCI,type="html",title="Beta OLS Confidence interval",digits=6))
+```
+
+
+### 4.2 OLS with all controls
+With all the controls included, the estimate of $\beta$ is 0.00527 and it is significant with 95% confidence interval of [0.00286,0.00768]. The magnitude of the effect is considered moderate. Although it shows that $\beta$ is positively correlated with stock level excess return, the intercept is significantly different from zero, which still contradicts with the Sharpe CAPM. Besides of the time dummies, several other firm characteristics indicate significant effects, including trading volume, book to market value, etc. With over 200 explanatory variables, over fitting likely exists. That gives us motivation to examine the data with a machine learning approach. 
+
+```{r, results='asis'}
+y=as.vector(project$return)
+D=as.vector(project$beta)
+controls=x[,-c(2)]
+
+Full=lm(y~D+controls, data=project)
+
+OLScoef_all=coeftest(Full,vcov=vcovHC(Full,type = "HC0"), digits=6)
+
+suppressWarnings(stargazer(OLScoef_all,type="html",title="OLS Coefficients with all controls", digits=6))
+
+```
+
+
+```{r, results='asis'}
+FullCI=round(confint(Full)[2,],digits=6)
+
+suppressWarnings(stargazer(FullCI,type="html",title="All_OLS Confidence interval",digits=6))
+```
+
+### 4.3 Naive adaptive LASSO to select controls
+Applying a machine learning method to estimate $\beta$, I first use naive adaptive LASSO. As selection is our main purpose in this exercise, 1se lambda is applied to exclude more regressors with weak explanatory power. 
+
+As showed by the results, no regressor is selected in this exercise besides of $\beta$, whose weight is set as 0. This implies the regressors are of the order same as the noise term, so the adaptive LASSO model is not able to detect any control.  
+
+Nevertheless, I consider those controls important given they might reverse the sign of $\beta$ coefficient, positive to be in line with the CAPM model while negative not. In addition, the firm characteristics are likely to be highly correlated with the market $\beta$, so the estimation of $\beta$ can be heavily biased. This provides us with a strong rationale to apply double LASSO approach on the data.  
+
+```{r, results='asis'}
+w=coef(Full)[-1]
+w=1/abs(w)
+w[2]=0
+
+
+cv.NL=cv.glmnet(x,y,data=project,alpha=1,family="gaussian",nfolds=10,penalty.factor=w,standardize=FALSE)
+Included=which(coef(cv.NL,s=cv.NL$lambda.1se)[-1]!=0)
+ 
+Post_Lasso=lm(y~x[,Included])
+  
+Naive_PostLasso=coeftest(Post_Lasso,vcov=vcovHC(Post_Lasso,type = "HC0"), digits=6)
+
+suppressWarnings(stargazer(Naive_PostLasso,type="html",title="Naive Post Lasso"))
+
+coefnl <- as.matrix(coef(cv.NL))
+suppressWarnings(stargazer(coefnl,type="html",title="Naive Post Lasso Coefficients",digits=6))
+```
+
+
+```{r, results='asis'}
+Naive_PLCI=round(confint(Naive_PostLasso)[2,],digits=6)
+
+suppressWarnings(stargazer(Naive_PLCI,type="html",title="Naive Post Lasso Confidence interval",digits=6))
+
+```
+
+### 4.4 Post-LASSO with Double LASSO
+Post-LASSO with Double LASSO makes a selection of 154 control variables among 235. The estimate of $\beta$ resumes to positive after incorporating selected controls. The estimate of 0.0053 is significant with 95% confidence interval of  [0.0023, 0.0082], which is wider than the confidence interval of simple OLS with all variables. This is normal, because the estimate would be less precise with selection property of LASSO.
+
+However, even Post-LASSO based Double LASSO already excludes 81 variables, there are still a lot of variables remaining in the model. This could be explained by the common correlation  among the characteristics of one firm. But if we exclude industry and time dummies, only 32 firm characteristic variables have statistical significance. On top of this, the significance of some covariates improves. For instance, the significance level of the Amihud Illiquidity ratio (ILLIQ)  was improved from 10% significance to the highest level. The magnitude of the effect of ILLIQ is considerate at 105 (though the movement of ILLIQ would be small in normal case). Double LASSO helps to pick valuable covariates out compared to the traditional method. 
+
+```{r, results='asis'}
+DLasso=rlassoEffect(controls,y,D,method="double selection",intercept=TRUE)
+
+suppressWarnings(stargazer(as.matrix(summary(DLasso)$coefficients),type="html",title="Double Post-Lasso summary",digits=6))
+
+suppressWarnings(stargazer(as.matrix(DLasso$selection.index),type="html",title="Double Post-Lasso selection",digits=6))
+sum(DLasso$selection.index==TRUE)
+
+```
+
+
+This part is to check the intercept and the covariates.
+```{r, results='asis'}
+n=names(unlist(Filter(function(x){x==TRUE}, DLasso$selection.index)))
+controls_selected=x[,c(n)]
+post=lm(y~D+controls_selected)
+
+PostLasso=coeftest(post,vcov=vcovHC(post,type = "HC0"), digits=6)
+
+suppressWarnings(stargazer(post,type="html",title="Post-Lasso  check",digits=6))
+```
+
+```{r, results='asis'}
+DLassoCI=confint(DLasso)
+
+suppressWarnings(stargazer(DLassoCI,type="html",title="Double Post-Lasso Confidence interval",digits=6))
+
+```
+
+## 5 Comparison between the approaches
+From the comparison table below, we can see that both OLS without control and Naive LASSO are not reliable given the negative estimate of Beta generated. This is because the estimate shall be a proxy to market premium (return of the market portfolio minus risk free rate in the CAPM), which shall not be negative, otherwise it does not make any sense to invest in risky assets.  
+
+The result of Double LASSO is quite close to the OLS with all controls included. The standard error reduced slightly as some unnecessary controls creating noise are excluded. 
+```{r}
+library(kableExtra)
+table=matrix(0,4,4)
+table[1,]=c(OLScoef[2,1],OLScoef[2,2],OLSCI)
+table[2,]=c(OLScoef_all[2,1],OLScoef_all[2,2],FullCI)
+table[3,]=c(Naive_PostLasso[2,1],Naive_PostLasso[2,2],Naive_PLCI)
+table[4,]=c(PostLasso[2,1],PostLasso[2,2],DLassoCI)
+colnames(table)=c("Estimate", "Std.Err" ,"2.5%","97.5%")
+rownames(table)=c("OLS without control","OLS with all controls","Naive Lasso/post-Lasso","Lasso/post-Lasso with Double Lasso")
+table=round(table,digits=6)
+kable_styling(kable(
+  head(table),
+  caption = "Estimates for Beta of Sharpe CAPM"
+))
+
+```
+
+## 6 Conclusion 
+### 6.1 Comparison between forecasting and estimation
+
+* These two approaches are driven by completely different motivations. From a forecasting perspective, predicting the out of sample value is the core purpose. Dropping regressors means dropping information. So the prediction approach typically tries to maintain as much information as possible to predict. In this sense Ridge would be an efficient tool as it keeps all information. LASSO, with the L1 norm setting, has the selection property by design. So LASSO's prediction performance would be less desirable compared to Ridge. 
+
+* From the perspective of estimation, removing bias and estimating the effect from the variable of interest is the core purpose. Out of sample fitting is not pursued in this context. Instead, avoiding over fitting by a proper selection among a large number of regressors is desirable. So LASSO is a good candidate for estimation given its selection property to pick the right regressors.
+
+* The result is that the optimal penalty term (Lambda) would be different between prediction and estimation. The best lambda generated from cross validation tends to be too small and too many regressors would be included so as to push the prediction error down. 
+
+### 6.2 Estimation result 
+
+* Although the estimate of Post LASSO based double LASSO is quite close to the one without selection, it serves well to show the comparison between naive LASSO and double LASSO in the case where the  variable of interest is highly correlated with the controls. There are no controls detected in the naive LASSO and 154 selected in the double LASSO. In addition, the significance of some controls is improved after selection, e.g. beta squared, dollar trading volume, 1 month momentum, etc. This is valuable when considering the effect of $\beta$ and its covariates. 
+
+* This project also supports critiques of Sharpe CAPM. The conclusion is two fold:
+
+  1. The intercept is significantly different from zero. 
+  
+  2. In spite of the positive estimate of $\beta$ in the result, it is apparently not the only force affecting the the behavior of excess return on stock level. 
+
+
+- Limitations of the dataset: the improvement of the estimation of $\beta$ is not significant by double LASSO in this dataset. One of the assumptions of double LASSO is that the model should be sparse. This might not be the case given the complicated market mechanism of risky asset pricing. Besides, only considering linear model could result to model misspecification.  
